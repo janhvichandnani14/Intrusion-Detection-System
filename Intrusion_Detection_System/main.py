@@ -105,73 +105,80 @@ class IntrusionDetection:
                 return True
         return False
 
-    def extract_coordinates(self, event, x, y, flag, param):
+    def extract_coordinates(self, event, x, y, flags, param):
         if event == cv2.EVENT_LBUTTONDOWN:
-            self.image_coordinates.append([x, y])
-        elif event == cv2.EVENT_RBUTTONDOWN:
-            cv2.setMouseCallback('image', lambda *args: None)
-            self.right_click_happened = True
+            if len(self.image_coordinates) < 2:
+                self.image_coordinates.append([x, y])
+
 
     def call(self):
         player = self.get_video_from_url()
         assert player.isOpened()
-        x_shape = int(player.get(cv2.CAP_PROP_FRAME_WIDTH))
-        y_shape = int(player.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    
+        # Notify that the camera is active
         base_url = self.url_of_group + f'/sendMessage?chat_id={self.chat_id}&text=Your Camera is Active Now.'
         requests.get(base_url)
 
-        self.mouse_callback_happened = False
         while True:
             ret, frame = player.read()
-            param = frame
+            if not ret:
+                break
+
+            param = frame.copy()
             cv2.imshow('image', frame)
+
             if cv2.waitKey(50) & 0xFF == ord('q'):
                 break
 
-            if not self.right_click_happened:
-                if not self.mouse_callback_happened:
-                    cv2.setMouseCallback('image', self.extract_coordinates, param)
-                    self.mouse_callback_happened = True
-                for coord in self.image_coordinates:
-                    x, y = coord
-                    cv2.circle(param, center=(x, y), radius=2, color=(0, 0, 255), thickness=2)
-                    cv2.imshow('image', param)
-                    if cv2.waitKey(50) & 0xFF == ord('q'):
-                        break
+            # ROI selection using 2 mouse clicks
+            if len(self.image_coordinates) < 2:
+                cv2.setMouseCallback('image', self.extract_coordinates, param)
+                for idx, point in enumerate(self.image_coordinates):
+                    x, y = point
+                    cv2.circle(frame, center=(x, y), radius=6, color=(0, 0, 255), thickness=-1)
+                    cv2.putText(frame, f"P{idx+1}", (x + 10, y - 10), cv2.FONT_HERSHEY_SIMPLEX,0.6, (0, 255, 255), 2)
 
-            else:
-                points = np.array(self.image_coordinates).reshape((-1, 1, 2))
-                color = (255, 0, 0)
-                thickness = 2
-                isClosed = True
-                image = cv2.polylines(frame, [points], isClosed, color, thickness)
-                cv2.imshow('image', param)
-                if cv2.waitKey(50) & 0xFF == ord('q'):
-                    break
 
-                mask = np.zeros((frame.shape[0], frame.shape[1]), dtype=np.uint8)
-                cv2.fillConvexPoly(mask, points, 1)
-                mask = mask.astype(bool)
+                if len(self.image_coordinates) == 1:
+                    cv2.putText(frame, "Click bottom-right corner", (10, 30),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                elif len(self.image_coordinates) == 0:
+                    cv2.putText(frame, "Click top-left corner", (10, 30),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
-                out = np.zeros_like(frame)
-                out[mask] = frame[mask]
-                cv2.imshow('masked_image', out)
-                if cv2.waitKey(50) & 0xFF == ord('q'):
-                    break
+                cv2.imshow('image', frame)
+                continue
 
-                results = self.score_frame(out)
-                out = self.plot_boxes(results, out)
-                cv2.imshow("masked_image", out)
-                if cv2.waitKey(50) & 0xFF == ord('q'):
-                    break
+            # Define ROI rectangle
+            pt1 = tuple(self.image_coordinates[0])
+            pt2 = tuple(self.image_coordinates[1])
+            x1, y1 = min(pt1[0], pt2[0]), min(pt1[1], pt2[1])
+            x2, y2 = max(pt1[0], pt2[0]), max(pt1[1], pt2[1])
 
-                frame = self.plot_boxes(results, frame)
-                cv2.imshow("image", frame)
-                if cv2.waitKey(50) & 0xFF == ord('q'):
-                    break
+            # Draw rectangle on full frame
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
+            roi = frame[y1:y2, x1:x2]
+            cv2.imshow('image', frame)
 
-                if self.to_send_or_not(results):
-                    self.sending_to_telegram(results,frame)
+            # Run YOLO detection on ROI
+            results = self.score_frame(roi)
+
+            # Show detection boxes in ROI
+            roi_with_boxes = self.plot_boxes(results, roi.copy())
+            cv2.imshow("roi", roi_with_boxes)
+
+            # Optionally show detections on full frame
+            frame_with_boxes = self.plot_boxes(results, frame.copy())
+            cv2.imshow("image", frame_with_boxes)
+
+            # If person detected, send alert
+            if self.to_send_or_not(results):
+                self.sending_to_telegram(results, frame)
+
+
+        player.release()
+        cv2.destroyAllWindows()
+
 
 
 # IP Webcam: 'http://192.168.43.1:8080/video'
