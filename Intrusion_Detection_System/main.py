@@ -61,7 +61,7 @@ class IntrusionDetection:
                 cv2.putText(frame, text, (x1, y1), cv2.FONT_HERSHEY_SIMPLEX, 0.9, bgr, 2)
         return frame
 
-    def sending_to_telegram(self, results):
+    def sending_to_telegram(self, results, frame):
         labels, cord = results
         n = len(labels)
 
@@ -75,10 +75,26 @@ class IntrusionDetection:
 
                 if self.var:
                     self.var = False
+                    # Get current timestamp
                     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     message = f"🚨 Person detected at {timestamp}"
-                    base_url = f"{self.url_of_group}/sendMessage?chat_id={self.chat_id}&text={message}"
-                    requests.get(base_url)
+
+                    # Send text message
+                    text_url = f"{self.url_of_group}/sendMessage?chat_id={self.chat_id}&text={message}"
+                    requests.get(text_url)
+
+                    # Save the frame as an image
+                    image_path = "alert.jpg"
+                    cv2.imwrite(image_path, frame)
+
+                    # Send the image
+                    with open(image_path, 'rb') as photo:
+                        files = {'photo': photo}
+                        image_url = f"{self.url_of_group}/sendPhoto"
+                        data = {'chat_id': self.chat_id}
+                        requests.post(image_url, files=files, data=data)
+
+
 
     def to_send_or_not(self, results):
         labels, cord = results
@@ -155,7 +171,7 @@ class IntrusionDetection:
                     break
 
                 if self.to_send_or_not(results):
-                    self.sending_to_telegram(results)
+                    self.sending_to_telegram(results,frame)
 
 
 # IP Webcam: 'http://192.168.43.1:8080/video'
